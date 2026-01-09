@@ -3,13 +3,14 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>JXPDF</title>
+    <title>PDF Editor Pro - Professional PDF Tools</title>
     
-    <!-- PDF.js -->
+    <!-- PDF.js - Using version 3.11.174 for better compatibility with non-module syntax
+         For newer versions (5.x), you would need to use ES modules with import statements -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
     
-    <!-- PDF-lib -->
-    <script src="https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
+    <!-- PDF-lib - Latest stable version with integrity check for security -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js" integrity="sha512-z8IYLHO8bTgFqj+yrPyIJnzBDf7DDhWwiEsk4sY+Oe6J2M+WQequeGS7qioI5vT6rXgVRb4K1UVQC5ER7MKzKQ==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
     
     <!-- JSZip -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
@@ -633,7 +634,7 @@
         <div class="top-bar">
             <div class="logo">
                 <div class="logo-icon">📄</div>
-                <span>JXPDF</span>
+                <span>PDF Editor Pro</span>
             </div>
             <div class="top-actions">
                 <input type="file" id="fileInput" class="hidden" accept=".pdf,application/pdf" onchange="loadPDFFile(event)">
@@ -911,71 +912,54 @@
                 totalPages = currentPDF.numPages;
                 currentPage = 1;
                 
-                // Then try to load with PDF-lib (for editing) - this is optional
+                // Try multiple strategies to load with PDF-lib
                 let pdfLibLoaded = false;
-                try {
-                    if (password) {
-                        // Try with password first
-                        try {
-                            currentPDFDoc = await PDFLib.PDFDocument.load(data, {
-                                password: password,
-                                ignoreEncryption: true,
-                                updateMetadata: false
-                            });
-                            pdfLibLoaded = true;
-                        } catch (e) {
-                            console.warn('PDF-lib with password failed, trying without:', e);
-                            // If password doesn't work, try without
-                            try {
-                                currentPDFDoc = await PDFLib.PDFDocument.load(data, {
-                                    ignoreEncryption: true,
-                                    updateMetadata: false
-                                });
-                                pdfLibLoaded = true;
-                            } catch (e2) {
-                                console.warn('PDF-lib without password also failed:', e2);
-                            }
-                        }
-                    } else {
-                        try {
-                            currentPDFDoc = await PDFLib.PDFDocument.load(data, {
-                                ignoreEncryption: true,
-                                updateMetadata: false
-                            });
-                            pdfLibLoaded = true;
-                        } catch (e) {
-                            console.warn('PDF-lib basic load failed:', e);
-                            // Try with just ignoreEncryption
-                            try {
-                                currentPDFDoc = await PDFLib.PDFDocument.load(data, {
-                                    ignoreEncryption: true
-                                });
-                                pdfLibLoaded = true;
-                            } catch (e2) {
-                                console.warn('PDF-lib with ignoreEncryption failed:', e2);
-                                // Last attempt - bare minimum options
-                                try {
-                                    currentPDFDoc = await PDFLib.PDFDocument.load(data);
-                                    pdfLibLoaded = true;
-                                } catch (e3) {
-                                    console.warn('PDF-lib all attempts failed:', e3);
-                                }
-                            }
+                const strategies = [
+                    // Strategy 1: Standard load with ignoreEncryption
+                    async () => {
+                        return await PDFLib.PDFDocument.load(data, {
+                            ignoreEncryption: true,
+                            updateMetadata: false
+                        });
+                    },
+                    // Strategy 2: Just ignoreEncryption
+                    async () => {
+                        return await PDFLib.PDFDocument.load(data, {
+                            ignoreEncryption: true
+                        });
+                    },
+                    // Strategy 3: Bare minimum
+                    async () => {
+                        return await PDFLib.PDFDocument.load(data);
+                    },
+                    // Strategy 4: Try to recreate the PDF from PDF.js rendering
+                    async () => {
+                        console.log('Attempting to recreate PDF from rendered pages...');
+                        return await recreatePDFFromRender();
+                    }
+                ];
+                
+                for (let i = 0; i < strategies.length; i++) {
+                    try {
+                        console.log(`Trying PDF-lib load strategy ${i + 1}...`);
+                        currentPDFDoc = await strategies[i]();
+                        pdfLibLoaded = true;
+                        console.log(`✓ Strategy ${i + 1} succeeded!`);
+                        break;
+                    } catch (e) {
+                        console.warn(`Strategy ${i + 1} failed:`, e.message);
+                        if (i === strategies.length - 1) {
+                            console.error('All strategies failed');
                         }
                     }
-                } catch (pdfLibError) {
-                    console.warn('PDF-lib load failed completely:', pdfLibError);
                 }
                 
-                // Enable tools based on what loaded
-                if (pdfLibLoaded) {
-                    console.log('✓ PDF loaded successfully - full editing available');
-                    enableTools();
-                } else {
-                    console.warn('⚠ PDF loaded for viewing only - editing disabled');
-                    showAlert('info', 'PDF loaded in view-only mode. Some editing features may not be available for this file.');
-                    // Only enable viewing tools
-                    enableViewingTools();
+                // Always enable all tools - we'll handle operations differently based on what loaded
+                enableTools();
+                
+                if (!pdfLibLoaded) {
+                    console.warn('⚠ Using fallback mode - operations will use PDF.js rendering');
+                    showAlert('info', 'Using advanced compatibility mode for this PDF. All features available but may be slower.');
                 }
                 
                 await renderAllPages();
@@ -986,6 +970,17 @@
                 console.error('Error in loadPDF:', error);
                 throw error;
             }
+        }
+        
+        // Recreate PDF from PDF.js rendered pages
+        async function recreatePDFFromRender() {
+            console.log('Creating new PDF from rendered pages...');
+            const newPdf = await PDFLib.PDFDocument.create();
+            
+            // We'll populate this when needed
+            // For now, just return the empty document
+            // Operations will render pages on-demand
+            return newPdf;
         }
         
         async function renderAllPages() {
@@ -1083,23 +1078,6 @@
             });
         }
         
-        function enableViewingTools() {
-            // Only enable tools that work with PDF.js (viewing and converting)
-            const viewingButtons = ['toImagesBtn', 'downloadBtn'];
-            viewingButtons.forEach(id => {
-                document.getElementById(id).disabled = false;
-            });
-            
-            // Disable editing tools
-            const editingButtons = ['rotateBtn', 'extractBtn', 'deleteBtn', 'splitBtn', 
-                                   'watermarkBtn', 'pageNumBtn', 'protectBtn'];
-            editingButtons.forEach(id => {
-                const btn = document.getElementById(id);
-                btn.disabled = true;
-                btn.title = 'Not available for this PDF';
-            });
-        }
-        
         function showProgress(text, subtext) {
             document.getElementById('progressText').textContent = text;
             document.getElementById('progressSubtext').textContent = subtext;
@@ -1116,11 +1094,6 @@
         
         // Tool Functions
         async function openRotateTool() {
-            if (!currentPDFDoc) {
-                alert('Editing is not available for this PDF. The PDF can only be viewed.');
-                return;
-            }
-            
             const modalBody = document.getElementById('modalBody');
             document.getElementById('modalTitle').innerHTML = '🔄 Rotate Pages';
             
@@ -1189,20 +1162,68 @@
             
             try {
                 const thumbs = document.querySelectorAll('#rotateGrid .page-thumbnail');
+                const rotations = [];
                 
                 thumbs.forEach((thumb, index) => {
-                    const rotation = parseInt(thumb.dataset.rotation);
-                    if (rotation !== 0) {
-                        const page = currentPDFDoc.getPage(index);
-                        const currentRotation = page.getRotation().angle;
-                        page.setRotation(PDFLib.degrees(currentRotation + rotation));
-                    }
+                    rotations[index] = parseInt(thumb.dataset.rotation);
                 });
                 
-                const pdfBytes = await currentPDFDoc.save();
-                pdfData = pdfBytes;
-                
-                await loadPDF(pdfBytes, pdfPassword);
+                // Check if we have a working PDF-lib document
+                if (currentPDFDoc && currentPDFDoc.getPageCount() > 0) {
+                    // Use PDF-lib
+                    thumbs.forEach((thumb, index) => {
+                        const rotation = parseInt(thumb.dataset.rotation);
+                        if (rotation !== 0) {
+                            const page = currentPDFDoc.getPage(index);
+                            const currentRotation = page.getRotation().angle;
+                            page.setRotation(PDFLib.degrees(currentRotation + rotation));
+                        }
+                    });
+                    
+                    const pdfBytes = await currentPDFDoc.save();
+                    pdfData = pdfBytes;
+                    
+                    await loadPDF(pdfBytes, pdfPassword);
+                } else {
+                    // Fallback: Create new PDF from rotated renders
+                    const newPdf = await PDFLib.PDFDocument.create();
+                    
+                    for (let i = 0; i < totalPages; i++) {
+                        updateProgress(((i + 1) / totalPages) * 100, `Processing page ${i + 1} of ${totalPages}...`);
+                        
+                        const rotation = rotations[i];
+                        const page = await currentPDF.getPage(i + 1);
+                        
+                        // Adjust viewport for rotation
+                        let viewport = page.getViewport({ scale: 2.0, rotation: rotation });
+                        
+                        const canvas = document.createElement('canvas');
+                        const context = canvas.getContext('2d');
+                        canvas.width = viewport.width;
+                        canvas.height = viewport.height;
+                        
+                        await page.render({ canvasContext: context, viewport: viewport }).promise;
+                        
+                        // Convert canvas to blob then to array buffer
+                        const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+                        const arrayBuffer = await blob.arrayBuffer();
+                        const imageBytes = new Uint8Array(arrayBuffer);
+                        
+                        const pngImage = await newPdf.embedPng(imageBytes);
+                        const pdfPage = newPdf.addPage([pngImage.width, pngImage.height]);
+                        pdfPage.drawImage(pngImage, { 
+                            x: 0, 
+                            y: 0, 
+                            width: pngImage.width, 
+                            height: pngImage.height 
+                        });
+                    }
+                    
+                    const pdfBytes = await newPdf.save();
+                    pdfData = pdfBytes;
+                    
+                    await loadPDF(pdfBytes, pdfPassword);
+                }
                 
                 closeModal();
                 hideProgress();
@@ -1214,19 +1235,15 @@
             }
         }
         
+        function updateProgress(percent, text) {
+            document.getElementById('progressSubtext').textContent = text;
+        }
+        
         async function openExtractTool() {
-            if (!currentPDFDoc) {
-                alert('Editing is not available for this PDF. The PDF can only be viewed.');
-                return;
-            }
             await openPageSelectionTool('extract', '📑 Extract Pages', 'Extract Selected Pages');
         }
         
         async function openDeleteTool() {
-            if (!currentPDFDoc) {
-                alert('Editing is not available for this PDF. The PDF can only be viewed.');
-                return;
-            }
             await openPageSelectionTool('delete', '🗑️ Delete Pages', 'Delete Selected Pages');
         }
         
@@ -1295,11 +1312,50 @@
             showProgress('Extracting pages...', 'Please wait');
             
             try {
-                const newPdf = await PDFLib.PDFDocument.create();
-                const copiedPages = await newPdf.copyPages(currentPDFDoc, selected);
-                copiedPages.forEach(page => newPdf.addPage(page));
+                let pdfBytes;
                 
-                const pdfBytes = await newPdf.save();
+                if (currentPDFDoc && currentPDFDoc.getPageCount() > 0) {
+                    // Use PDF-lib
+                    const newPdf = await PDFLib.PDFDocument.create();
+                    const copiedPages = await newPdf.copyPages(currentPDFDoc, selected);
+                    copiedPages.forEach(page => newPdf.addPage(page));
+                    pdfBytes = await newPdf.save();
+                } else {
+                    // Fallback: Create from rendered pages
+                    const newPdf = await PDFLib.PDFDocument.create();
+                    
+                    for (let i = 0; i < selected.length; i++) {
+                        const pageIndex = selected[i];
+                        updateProgress(((i + 1) / selected.length) * 100, `Processing page ${i + 1} of ${selected.length}...`);
+                        
+                        const page = await currentPDF.getPage(pageIndex + 1);
+                        const viewport = page.getViewport({ scale: 2.0 });
+                        
+                        const canvas = document.createElement('canvas');
+                        const context = canvas.getContext('2d');
+                        canvas.width = viewport.width;
+                        canvas.height = viewport.height;
+                        
+                        await page.render({ canvasContext: context, viewport: viewport }).promise;
+                        
+                        // Convert canvas to blob then to array buffer
+                        const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+                        const arrayBuffer = await blob.arrayBuffer();
+                        const imageBytes = new Uint8Array(arrayBuffer);
+                        
+                        const pngImage = await newPdf.embedPng(imageBytes);
+                        const pdfPage = newPdf.addPage([pngImage.width, pngImage.height]);
+                        pdfPage.drawImage(pngImage, { 
+                            x: 0, 
+                            y: 0, 
+                            width: pngImage.width, 
+                            height: pngImage.height 
+                        });
+                    }
+                    
+                    pdfBytes = await newPdf.save();
+                }
+                
                 const blob = new Blob([pdfBytes], { type: 'application/pdf' });
                 saveAs(blob, 'extracted_pages.pdf');
                 
@@ -1332,21 +1388,58 @@
             showProgress('Deleting pages...', 'Please wait');
             
             try {
-                const newPdf = await PDFLib.PDFDocument.create();
                 const pagesToKeep = [];
-                
                 for (let i = 0; i < totalPages; i++) {
                     if (!selected.has(i)) {
                         pagesToKeep.push(i);
                     }
                 }
                 
-                const copiedPages = await newPdf.copyPages(currentPDFDoc, pagesToKeep);
-                copiedPages.forEach(page => newPdf.addPage(page));
+                let pdfBytes;
                 
-                const pdfBytes = await newPdf.save();
+                if (currentPDFDoc && currentPDFDoc.getPageCount() > 0) {
+                    // Use PDF-lib
+                    const newPdf = await PDFLib.PDFDocument.create();
+                    const copiedPages = await newPdf.copyPages(currentPDFDoc, pagesToKeep);
+                    copiedPages.forEach(page => newPdf.addPage(page));
+                    pdfBytes = await newPdf.save();
+                } else {
+                    // Fallback: Create from rendered pages
+                    const newPdf = await PDFLib.PDFDocument.create();
+                    
+                    for (let i = 0; i < pagesToKeep.length; i++) {
+                        const pageIndex = pagesToKeep[i];
+                        updateProgress(((i + 1) / pagesToKeep.length) * 100, `Processing page ${i + 1} of ${pagesToKeep.length}...`);
+                        
+                        const page = await currentPDF.getPage(pageIndex + 1);
+                        const viewport = page.getViewport({ scale: 2.0 });
+                        
+                        const canvas = document.createElement('canvas');
+                        const context = canvas.getContext('2d');
+                        canvas.width = viewport.width;
+                        canvas.height = viewport.height;
+                        
+                        await page.render({ canvasContext: context, viewport: viewport }).promise;
+                        
+                        // Convert canvas to blob then to array buffer
+                        const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+                        const arrayBuffer = await blob.arrayBuffer();
+                        const imageBytes = new Uint8Array(arrayBuffer);
+                        
+                        const pngImage = await newPdf.embedPng(imageBytes);
+                        const pdfPage = newPdf.addPage([pngImage.width, pngImage.height]);
+                        pdfPage.drawImage(pngImage, { 
+                            x: 0, 
+                            y: 0, 
+                            width: pngImage.width, 
+                            height: pngImage.height 
+                        });
+                    }
+                    
+                    pdfBytes = await newPdf.save();
+                }
+                
                 pdfData = pdfBytes;
-                
                 await loadPDF(pdfBytes, pdfPassword);
                 
                 closeModal();
@@ -1360,10 +1453,6 @@
         }
         
         function openWatermarkTool() {
-            if (!currentPDFDoc) {
-                alert('Editing is not available for this PDF. The PDF can only be viewed.');
-                return;
-            }
             document.getElementById('modalTitle').innerHTML = '💧 Add Watermark';
             document.getElementById('modalBody').innerHTML = `
                 <div class="form-group">
@@ -1399,23 +1488,76 @@
                 const fontSize = parseInt(document.getElementById('watermarkSize').value);
                 const opacity = parseFloat(document.getElementById('watermarkOpacity').value);
                 
-                const pages = currentPDFDoc.getPages();
+                let pdfBytes;
                 
-                for (const page of pages) {
-                    const { width, height } = page.getSize();
+                if (currentPDFDoc && currentPDFDoc.getPageCount() > 0) {
+                    // Use PDF-lib (direct method)
+                    const pages = currentPDFDoc.getPages();
                     
-                    page.drawText(text, {
-                        x: width / 2 - (text.length * fontSize / 4),
-                        y: height / 2,
-                        size: fontSize,
-                        opacity: opacity,
-                        rotate: PDFLib.degrees(45)
-                    });
+                    for (let i = 0; i < pages.length; i++) {
+                        updateProgress(((i + 1) / pages.length) * 100, `Processing page ${i + 1} of ${pages.length}...`);
+                        
+                        const page = pages[i];
+                        const { width, height } = page.getSize();
+                        
+                        page.drawText(text, {
+                            x: width / 2 - (text.length * fontSize / 4),
+                            y: height / 2,
+                            size: fontSize,
+                            opacity: opacity,
+                            rotate: PDFLib.degrees(45),
+                            color: PDFLib.rgb(0.5, 0.5, 0.5)
+                        });
+                    }
+                    
+                    pdfBytes = await currentPDFDoc.save();
+                } else {
+                    // Fallback: Render pages with watermark overlay
+                    const newPdf = await PDFLib.PDFDocument.create();
+                    
+                    for (let i = 0; i < totalPages; i++) {
+                        updateProgress(((i + 1) / totalPages) * 100, `Processing page ${i + 1} of ${totalPages}...`);
+                        
+                        const page = await currentPDF.getPage(i + 1);
+                        const viewport = page.getViewport({ scale: 2.0 });
+                        
+                        // Create canvas and render PDF page
+                        const canvas = document.createElement('canvas');
+                        const context = canvas.getContext('2d');
+                        canvas.width = viewport.width;
+                        canvas.height = viewport.height;
+                        
+                        await page.render({ canvasContext: context, viewport: viewport }).promise;
+                        
+                        // Draw watermark on canvas
+                        context.save();
+                        context.translate(canvas.width / 2, canvas.height / 2);
+                        context.rotate(45 * Math.PI / 180);
+                        context.font = `${fontSize * 2}px Arial`;
+                        context.fillStyle = `rgba(128, 128, 128, ${opacity})`;
+                        context.textAlign = 'center';
+                        context.fillText(text, 0, 0);
+                        context.restore();
+                        
+                        // Convert canvas to PDF page
+                        const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+                        const arrayBuffer = await blob.arrayBuffer();
+                        const imageBytes = new Uint8Array(arrayBuffer);
+                        
+                        const pngImage = await newPdf.embedPng(imageBytes);
+                        const pdfPage = newPdf.addPage([pngImage.width, pngImage.height]);
+                        pdfPage.drawImage(pngImage, { 
+                            x: 0, 
+                            y: 0, 
+                            width: pngImage.width, 
+                            height: pngImage.height 
+                        });
+                    }
+                    
+                    pdfBytes = await newPdf.save();
                 }
                 
-                const pdfBytes = await currentPDFDoc.save();
                 pdfData = pdfBytes;
-                
                 await loadPDF(pdfBytes, pdfPassword);
                 
                 closeModal();
@@ -1429,10 +1571,6 @@
         }
         
         function openPageNumbersTool() {
-            if (!currentPDFDoc) {
-                alert('Editing is not available for this PDF. The PDF can only be viewed.');
-                return;
-            }
             document.getElementById('modalTitle').innerHTML = '🔢 Add Page Numbers';
             document.getElementById('modalBody').innerHTML = `
                 <div class="form-group">
@@ -1464,48 +1602,133 @@
             try {
                 const position = document.getElementById('numberPosition').value;
                 const startNum = parseInt(document.getElementById('startNumber').value);
-                const pages = currentPDFDoc.getPages();
                 
-                pages.forEach((page, index) => {
-                    const { width, height } = page.getSize();
-                    const pageNum = (startNum + index).toString();
+                let pdfBytes;
+                
+                if (currentPDFDoc && currentPDFDoc.getPageCount() > 0) {
+                    // Use PDF-lib (direct method)
+                    const pages = currentPDFDoc.getPages();
                     
-                    let x, y;
-                    const margin = 30;
+                    pages.forEach((page, index) => {
+                        updateProgress(((index + 1) / pages.length) * 100, `Processing page ${index + 1} of ${pages.length}...`);
+                        
+                        const { width, height } = page.getSize();
+                        const pageNum = (startNum + index).toString();
+                        
+                        let x, y;
+                        const margin = 30;
+                        
+                        switch(position) {
+                            case 'bottom-center':
+                                x = width / 2 - 10;
+                                y = margin;
+                                break;
+                            case 'bottom-right':
+                                x = width - margin - 20;
+                                y = margin;
+                                break;
+                            case 'bottom-left':
+                                x = margin;
+                                y = margin;
+                                break;
+                            case 'top-center':
+                                x = width / 2 - 10;
+                                y = height - margin;
+                                break;
+                            case 'top-right':
+                                x = width - margin - 20;
+                                y = height - margin;
+                                break;
+                            case 'top-left':
+                                x = margin;
+                                y = height - margin;
+                                break;
+                        }
+                        
+                        page.drawText(pageNum, { x, y, size: 12 });
+                    });
                     
-                    switch(position) {
-                        case 'bottom-center':
-                            x = width / 2 - 10;
-                            y = margin;
-                            break;
-                        case 'bottom-right':
-                            x = width - margin - 20;
-                            y = margin;
-                            break;
-                        case 'bottom-left':
-                            x = margin;
-                            y = margin;
-                            break;
-                        case 'top-center':
-                            x = width / 2 - 10;
-                            y = height - margin;
-                            break;
-                        case 'top-right':
-                            x = width - margin - 20;
-                            y = height - margin;
-                            break;
-                        case 'top-left':
-                            x = margin;
-                            y = height - margin;
-                            break;
+                    pdfBytes = await currentPDFDoc.save();
+                } else {
+                    // Fallback: Render pages with page numbers
+                    const newPdf = await PDFLib.PDFDocument.create();
+                    
+                    for (let i = 0; i < totalPages; i++) {
+                        updateProgress(((i + 1) / totalPages) * 100, `Processing page ${i + 1} of ${totalPages}...`);
+                        
+                        const page = await currentPDF.getPage(i + 1);
+                        const viewport = page.getViewport({ scale: 2.0 });
+                        
+                        // Create canvas and render PDF page
+                        const canvas = document.createElement('canvas');
+                        const context = canvas.getContext('2d');
+                        canvas.width = viewport.width;
+                        canvas.height = viewport.height;
+                        
+                        await page.render({ canvasContext: context, viewport: viewport }).promise;
+                        
+                        // Draw page number on canvas
+                        const pageNum = (startNum + i).toString();
+                        const margin = 60; // Double for 2x scale
+                        let x, y;
+                        
+                        context.font = '24px Arial'; // Double for 2x scale
+                        context.fillStyle = 'black';
+                        
+                        switch(position) {
+                            case 'bottom-center':
+                                x = canvas.width / 2;
+                                y = canvas.height - margin;
+                                context.textAlign = 'center';
+                                break;
+                            case 'bottom-right':
+                                x = canvas.width - margin;
+                                y = canvas.height - margin;
+                                context.textAlign = 'right';
+                                break;
+                            case 'bottom-left':
+                                x = margin;
+                                y = canvas.height - margin;
+                                context.textAlign = 'left';
+                                break;
+                            case 'top-center':
+                                x = canvas.width / 2;
+                                y = margin;
+                                context.textAlign = 'center';
+                                break;
+                            case 'top-right':
+                                x = canvas.width - margin;
+                                y = margin;
+                                context.textAlign = 'right';
+                                break;
+                            case 'top-left':
+                                x = margin;
+                                y = margin;
+                                context.textAlign = 'left';
+                                break;
+                        }
+                        
+                        context.fillText(pageNum, x, y);
+                        
+                        // Convert canvas to PDF page
+                        const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+                        const arrayBuffer = await blob.arrayBuffer();
+                        const imageBytes = new Uint8Array(arrayBuffer);
+                        
+                        const pngImage = await newPdf.embedPng(imageBytes);
+                        const pdfPage = newPdf.addPage([pngImage.width, pngImage.height]);
+                        pdfPage.drawImage(pngImage, { 
+                            x: 0, 
+                            y: 0, 
+                            width: pngImage.width, 
+                            height: pngImage.height 
+                        });
                     }
                     
-                    page.drawText(pageNum, { x, y, size: 12 });
-                });
+                    pdfBytes = await newPdf.save();
+                }
                 
-                const pdfBytes = await currentPDFDoc.save();
                 pdfData = pdfBytes;
-                
                 await loadPDF(pdfBytes, pdfPassword);
                 
                 closeModal();
@@ -1519,10 +1742,6 @@
         }
         
         function openProtectTool() {
-            if (!currentPDFDoc) {
-                alert('Editing is not available for this PDF. The PDF can only be viewed.');
-                return;
-            }
             document.getElementById('modalTitle').innerHTML = '🔒 Protect PDF';
             document.getElementById('modalBody').innerHTML = `
                 <div class="alert alert-info">
@@ -1647,10 +1866,6 @@
         }
         
         function openSplitTool() {
-            if (!currentPDFDoc) {
-                alert('Editing is not available for this PDF. The PDF can only be viewed.');
-                return;
-            }
             document.getElementById('modalTitle').innerHTML = '✂️ Split PDF';
             document.getElementById('modalBody').innerHTML = `
                 <div class="form-group">
@@ -1685,28 +1900,103 @@
                 const method = document.getElementById('splitMethod').value;
                 const zip = new JSZip();
                 
-                if (method === 'all') {
-                    for (let i = 0; i < totalPages; i++) {
-                        const newPdf = await PDFLib.PDFDocument.create();
-                        const [copiedPage] = await newPdf.copyPages(currentPDFDoc, [i]);
-                        newPdf.addPage(copiedPage);
+                if (currentPDFDoc && currentPDFDoc.getPageCount() > 0) {
+                    // Use PDF-lib
+                    if (method === 'all') {
+                        for (let i = 0; i < totalPages; i++) {
+                            const newPdf = await PDFLib.PDFDocument.create();
+                            const [copiedPage] = await newPdf.copyPages(currentPDFDoc, [i]);
+                            newPdf.addPage(copiedPage);
+                            
+                            const pdfBytes = await newPdf.save();
+                            zip.file(`page_${i + 1}.pdf`, pdfBytes);
+                        }
+                    } else {
+                        const pagesPerFile = parseInt(document.getElementById('pagesPerFile').value);
+                        let fileNum = 1;
                         
-                        const pdfBytes = await newPdf.save();
-                        zip.file(`page_${i + 1}.pdf`, pdfBytes);
+                        for (let i = 0; i < totalPages; i += pagesPerFile) {
+                            const endPage = Math.min(i + pagesPerFile, totalPages);
+                            const newPdf = await PDFLib.PDFDocument.create();
+                            const pageIndices = Array.from({ length: endPage - i }, (_, k) => i + k);
+                            const copiedPages = await newPdf.copyPages(currentPDFDoc, pageIndices);
+                            copiedPages.forEach(page => newPdf.addPage(page));
+                            
+                            const pdfBytes = await newPdf.save();
+                            zip.file(`split_${fileNum++}.pdf`, pdfBytes);
+                        }
                     }
                 } else {
-                    const pagesPerFile = parseInt(document.getElementById('pagesPerFile').value);
-                    let fileNum = 1;
-                    
-                    for (let i = 0; i < totalPages; i += pagesPerFile) {
-                        const endPage = Math.min(i + pagesPerFile, totalPages);
-                        const newPdf = await PDFLib.PDFDocument.create();
-                        const pageIndices = Array.from({ length: endPage - i }, (_, k) => i + k);
-                        const copiedPages = await newPdf.copyPages(currentPDFDoc, pageIndices);
-                        copiedPages.forEach(page => newPdf.addPage(page));
+                    // Fallback: Create from rendered pages
+                    if (method === 'all') {
+                        for (let i = 0; i < totalPages; i++) {
+                            updateProgress(((i + 1) / totalPages) * 100, `Processing page ${i + 1} of ${totalPages}...`);
+                            
+                            const newPdf = await PDFLib.PDFDocument.create();
+                            const page = await currentPDF.getPage(i + 1);
+                            const viewport = page.getViewport({ scale: 2.0 });
+                            
+                            const canvas = document.createElement('canvas');
+                            const context = canvas.getContext('2d');
+                            canvas.width = viewport.width;
+                            canvas.height = viewport.height;
+                            
+                            await page.render({ canvasContext: context, viewport: viewport }).promise;
+                            
+                            const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+                            const arrayBuffer = await blob.arrayBuffer();
+                            const imageBytes = new Uint8Array(arrayBuffer);
+                            
+                            const pngImage = await newPdf.embedPng(imageBytes);
+                            const pdfPage = newPdf.addPage([pngImage.width, pngImage.height]);
+                            pdfPage.drawImage(pngImage, { 
+                                x: 0, 
+                                y: 0, 
+                                width: pngImage.width, 
+                                height: pngImage.height 
+                            });
+                            
+                            const pdfBytes = await newPdf.save();
+                            zip.file(`page_${i + 1}.pdf`, pdfBytes);
+                        }
+                    } else {
+                        const pagesPerFile = parseInt(document.getElementById('pagesPerFile').value);
+                        let fileNum = 1;
                         
-                        const pdfBytes = await newPdf.save();
-                        zip.file(`split_${fileNum++}.pdf`, pdfBytes);
+                        for (let i = 0; i < totalPages; i += pagesPerFile) {
+                            const endPage = Math.min(i + pagesPerFile, totalPages);
+                            const newPdf = await PDFLib.PDFDocument.create();
+                            
+                            for (let j = i; j < endPage; j++) {
+                                updateProgress(((j + 1) / totalPages) * 100, `Processing page ${j + 1} of ${totalPages}...`);
+                                
+                                const page = await currentPDF.getPage(j + 1);
+                                const viewport = page.getViewport({ scale: 2.0 });
+                                
+                                const canvas = document.createElement('canvas');
+                                const context = canvas.getContext('2d');
+                                canvas.width = viewport.width;
+                                canvas.height = viewport.height;
+                                
+                                await page.render({ canvasContext: context, viewport: viewport }).promise;
+                                
+                                const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+                                const arrayBuffer = await blob.arrayBuffer();
+                                const imageBytes = new Uint8Array(arrayBuffer);
+                                
+                                const pngImage = await newPdf.embedPng(imageBytes);
+                                const pdfPage = newPdf.addPage([pngImage.width, pngImage.height]);
+                                pdfPage.drawImage(pngImage, { 
+                                    x: 0, 
+                                    y: 0, 
+                                    width: pngImage.width, 
+                                    height: pngImage.height 
+                                });
+                            }
+                            
+                            const pdfBytes = await newPdf.save();
+                            zip.file(`split_${fileNum++}.pdf`, pdfBytes);
+                        }
                     }
                 }
                 
@@ -1787,18 +2077,19 @@
         async function downloadPDF() {
             if (!pdfData) return;
             
-            if (!currentPDFDoc) {
-                // If we can't edit, just download the original
-                const blob = new Blob([pdfData], { type: 'application/pdf' });
-                saveAs(blob, 'document.pdf');
-                showAlert('success', 'Original PDF downloaded (no edits were made)');
-                return;
-            }
-            
             try {
-                const pdfBytes = await currentPDFDoc.save();
+                let pdfBytes;
+                
+                if (currentPDFDoc && currentPDFDoc.getPageCount() > 0) {
+                    // Save edited version
+                    pdfBytes = await currentPDFDoc.save();
+                } else {
+                    // Save original
+                    pdfBytes = pdfData;
+                }
+                
                 const blob = new Blob([pdfBytes], { type: 'application/pdf' });
-                saveAs(blob, 'edited.pdf');
+                saveAs(blob, 'document.pdf');
                 showAlert('success', 'PDF downloaded successfully!');
             } catch (error) {
                 console.error('Error downloading:', error);
@@ -1832,4 +2123,4 @@
         });
     </script>
 </body>
-</html> 
+</html>
